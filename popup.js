@@ -1,5 +1,6 @@
 const statusEl = document.getElementById("status");
-const webhookInput = document.getElementById("webhookUrl");
+const WEBHOOK_URL =
+  "https://script.google.com/macros/s/AKfycbxFuqQrIy4kE9lz-25EWzSu6fHbVK9Kq_IO8mQjBAntUeJ0sOHwkCqOHk3yQuwPj8_FwQ/exec";
 
 function setStatus(msg) {
   statusEl.textContent = msg;
@@ -33,7 +34,10 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
       const otherPartyName =
         nameCandidates
           .map(getText)
-          .find((t) => t && t.length < 80 && !t.toLowerCase().includes("notifications")) || "";
+          .find(
+            (t) =>
+              t && t.length < 80 && !t.toLowerCase().includes("notifications"),
+          ) || "";
 
       // Attempt to find profile URL from "View profile" link or header anchor
       const linkCandidates = Array.from(document.querySelectorAll("a")).filter(
@@ -99,22 +103,33 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
 
             // Try to determine if it's from the user or the other party
             // LinkedIn uses 'msg-s-event-listitem--other' class for messages from the other party
-            const isOther = container.classList.contains("msg-s-event-listitem--other");
+            const isOther = container.classList.contains(
+              "msg-s-event-listitem--other",
+            );
             const isSent = !isOther;
-            
+
             // Extract sender name from message if it starts with "Name: " pattern
-            let sender = isSent ? "You" : (otherPartyName || "Other");
+            let sender = isSent ? "You" : otherPartyName || "Other";
             let cleanedText = messageText;
-            
+
             // First priority: check if message starts with sender name pattern
             if (messageText.includes(":")) {
               const match = messageText.match(/^([^:]+):\s*(.*)$/s);
               if (match) {
                 const possibleName = match[1].trim();
                 // If it looks like a name (not too long, no special chars), use it
-                if (possibleName && possibleName.length < 50 && !possibleName.includes("-")) {
+                if (
+                  possibleName &&
+                  possibleName.length < 50 &&
+                  !possibleName.includes("-")
+                ) {
                   // If this name matches otherPartyName, it's from them
-                  if (otherPartyName && possibleName.toLowerCase().includes(otherPartyName.toLowerCase().split(" ")[0])) {
+                  if (
+                    otherPartyName &&
+                    possibleName
+                      .toLowerCase()
+                      .includes(otherPartyName.toLowerCase().split(" ")[0])
+                  ) {
                     sender = otherPartyName;
                     cleanedText = match[2].trim();
                   } else if (!isSent) {
@@ -162,19 +177,26 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
             let cleanedMessage = msg.message
               // Remove "0 notifications total" with optional dash and surrounding whitespace
               .replace(/\d+\s+notifications?\s+total\s*-?\s*/gi, "")
-              // Remove lines containing "notifications" 
+              // Remove lines containing "notifications"
               .split("\n")
-              .map((line) => line.replace(/\d+\s+notifications?\s+total\s*-?\s*/gi, ""))
+              .map((line) =>
+                line.replace(/\d+\s+notifications?\s+total\s*-?\s*/gi, ""),
+              )
               .filter((line) => !line.toLowerCase().includes("notifications"))
               .join("\n")
               .trim();
             return { ...msg, message: cleanedMessage };
           })
-          .filter((msg) => msg.message && msg.message.length > 0 && !msg.message.toLowerCase().includes("notifications"))
+          .filter(
+            (msg) =>
+              msg.message &&
+              msg.message.length > 0 &&
+              !msg.message.toLowerCase().includes("notifications"),
+          )
           // Deduplicate by message content (keep the one with the most specific sender name)
           .reduce((unique, msg) => {
             const existingIndex = unique.findIndex(
-              (existing) => existing.message === msg.message
+              (existing) => existing.message === msg.message,
             );
             if (existingIndex === -1) {
               // No duplicate found, add it
@@ -231,26 +253,14 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
   });
 }
 
-async function loadSavedWebhook() {
-  const { webhookUrl } = await chrome.storage.sync.get(["webhookUrl"]);
-  if (webhookUrl) webhookInput.value = webhookUrl;
-}
 
-async function saveWebhook(url) {
-  await chrome.storage.sync.set({ webhookUrl: url });
-}
+
 
 document.getElementById("logBtn").addEventListener("click", async () => {
   try {
     const tab = await getActiveTab();
     if (!tab?.id) return;
-
-    const webhookUrl = webhookInput.value.trim();
-    if (!webhookUrl) {
-      setStatus("Please paste your Apps Script Web App URL first.");
-      return;
-    }
-    await saveWebhook(webhookUrl);
+    const webhookUrl = WEBHOOK_URL;
 
     const [result] = await extractFromLinkedIn(tab.id);
     const extracted = result?.result || {};
@@ -370,4 +380,3 @@ document.getElementById("latestBtn").addEventListener("click", async () => {
   }
 });
 
-loadSavedWebhook();
