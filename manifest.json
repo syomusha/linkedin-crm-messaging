@@ -1,0 +1,20 @@
+{
+    "manifest_version": 3,
+    "name": "LinkedIn CRM Logger",
+    "version": "1.0.0",
+    "description": "Log LinkedIn message details to Google Sheets CRM via Apps Script webhook.",
+    "permissions": [
+        "activeTab",
+        "scripting",
+        "storage"
+    ],
+    "host_permissions": [
+        "https://www.linkedin.com/*",
+        "https://script.google.com/*",
+        "https://script.googleusercontent.com/*"
+    ],
+    "action": {
+        "default_title": "Log to CRM",
+        "default_popup": "popup.html"
+    }
+}
