@@ -23,13 +23,17 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
 
       // Attempt to find the "other party" name in header
       const nameCandidates = [
+        document.querySelector(".msg-entity-lockup__entity-title"),
+        document.querySelector("h2.msg-entity-lockup__entity-title"),
         document.querySelector("h2"),
         document.querySelector("[data-control-name='thread_details_name']"),
         document.querySelector(".msg-thread__link-to-profile"),
         document.querySelector(".msg-thread__name"),
       ];
       const otherPartyName =
-        nameCandidates.map(getText).find((t) => t && t.length < 80) || "";
+        nameCandidates
+          .map(getText)
+          .find((t) => t && t.length < 80 && !t.toLowerCase().includes("notifications")) || "";
 
       // Attempt to find profile URL from "View profile" link or header anchor
       const linkCandidates = Array.from(document.querySelectorAll("a")).filter(
@@ -63,11 +67,9 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
         console.log("=== LinkedIn Message Extraction Debug ===");
 
         // Try to extract all messages with sender info
-        // Try multiple selectors as LinkedIn structure varies
+        // Use only the specific top-level message container class
         const msgContainers = Array.from(
-          document.querySelectorAll(
-            ".msg-s-event-listitem, .msg-s-message-list__event, [class*='msg-s-event']",
-          ),
+          document.querySelectorAll(".msg-s-event-listitem"),
         );
 
         console.log(`Found ${msgContainers.length} message containers`);
@@ -95,26 +97,34 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
               }
             }
 
-            // If no text found with selectors, try container's innerText as fallback
-            if (!messageText) {
-              messageText = container.innerText?.trim() || "";
-              if (messageText) {
-                console.log(
-                  `Message ${index + 1} found with fallback innerText`,
-                );
+            // Try to determine if it's from the user or the other party
+            // LinkedIn uses 'msg-s-event-listitem--other' class for messages from the other party
+            const isOther = container.classList.contains("msg-s-event-listitem--other");
+            const isSent = !isOther;
+            
+            // Extract sender name from message if it starts with "Name: " pattern
+            let sender = isSent ? "You" : (otherPartyName || "Other");
+            let cleanedText = messageText;
+            
+            // First priority: check if message starts with sender name pattern
+            if (messageText.includes(":")) {
+              const match = messageText.match(/^([^:]+):\s*(.*)$/s);
+              if (match) {
+                const possibleName = match[1].trim();
+                // If it looks like a name (not too long, no special chars), use it
+                if (possibleName && possibleName.length < 50 && !possibleName.includes("-")) {
+                  // If this name matches otherPartyName, it's from them
+                  if (otherPartyName && possibleName.toLowerCase().includes(otherPartyName.toLowerCase().split(" ")[0])) {
+                    sender = otherPartyName;
+                    cleanedText = match[2].trim();
+                  } else if (!isSent) {
+                    // Only trust extracted names if it's marked as from other party
+                    sender = possibleName;
+                    cleanedText = match[2].trim();
+                  }
+                }
               }
             }
-
-            // Try to determine if it's from the user or the other party
-            // LinkedIn uses different classes for sent vs received messages
-            const isSent =
-              container.closest(".msg-s-message-list__event--outgoing") !==
-                null ||
-              container.classList.contains(
-                "msg-s-message-list__event--outgoing",
-              ) ||
-              container.querySelector("[class*='outgoing']") !== null;
-            const sender = isSent ? "You" : otherPartyName || "Other";
 
             // Try to get timestamp if available
             const timeEl = container.querySelector("time");
@@ -129,12 +139,57 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
             return {
               index: index + 1,
               sender,
-              message: messageText,
+              message: cleanedText,
               timestamp,
               direction: isSent ? "Outbound" : "Inbound",
             };
           })
-          .filter((msg) => msg.message && msg.message.length > 0);
+          .filter((msg) => {
+            // Filter out system messages, metadata, and UI elements
+            if (!msg.message || msg.message.length === 0) return false;
+            const lower = msg.message.toLowerCase();
+            // Exclude common non-message content
+            if (lower.includes("notifications total")) return false;
+            if (lower.includes("sent the following message")) return false;
+            if (lower.includes("view") && lower.includes("profile"))
+              return false;
+            if (msg.message.includes("sent the following messages"))
+              return false;
+            return true;
+          })
+          .map((msg) => {
+            // Clean up message text by removing all variations of "notifications total"
+            let cleanedMessage = msg.message
+              // Remove "0 notifications total" with optional dash and surrounding whitespace
+              .replace(/\d+\s+notifications?\s+total\s*-?\s*/gi, "")
+              // Remove lines containing "notifications" 
+              .split("\n")
+              .map((line) => line.replace(/\d+\s+notifications?\s+total\s*-?\s*/gi, ""))
+              .filter((line) => !line.toLowerCase().includes("notifications"))
+              .join("\n")
+              .trim();
+            return { ...msg, message: cleanedMessage };
+          })
+          .filter((msg) => msg.message && msg.message.length > 0 && !msg.message.toLowerCase().includes("notifications"))
+          // Deduplicate by message content (keep the one with the most specific sender name)
+          .reduce((unique, msg) => {
+            const existingIndex = unique.findIndex(
+              (existing) => existing.message === msg.message
+            );
+            if (existingIndex === -1) {
+              // No duplicate found, add it
+              unique.push(msg);
+            } else {
+              // Duplicate found - prefer the one with the other party's actual name over "You"
+              const existing = unique[existingIndex];
+              if (msg.sender !== "You" && existing.sender === "You") {
+                // Replace generic "You" with specific name from other party
+                unique[existingIndex] = msg;
+              }
+              // Otherwise keep the existing one
+            }
+            return unique;
+          }, []);
 
         console.log(
           `After filtering: ${allMessages.length} messages with content`,
@@ -145,13 +200,19 @@ async function extractFromLinkedIn(tabId, extractAll = false) {
         // LinkedIn message bubbles vary; try common containers
         const msgCandidates = Array.from(
           document.querySelectorAll(
-            ".msg-s-event-listitem__body, .msg-s-message-list__event, .msg-s-event-listitem",
+            ".msg-s-event-listitem__body, .msg-s-message-group__text, .msg-s-event-listitem__message-bubble",
           ),
-        ).slice(-10);
+        ).slice(-20);
 
         for (let i = msgCandidates.length - 1; i >= 0; i--) {
           const t = msgCandidates[i].innerText?.trim();
           if (t && t.length > 0) {
+            // Filter out system messages and metadata
+            const lower = t.toLowerCase();
+            if (lower.includes("notifications total")) continue;
+            if (lower.includes("sent the following message")) continue;
+            if (t.includes("View") && t.includes("profile")) continue;
+            if (t.includes("sent the following messages")) continue;
             lastMessage = t;
             break;
           }
@@ -268,11 +329,11 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     // Display all messages in the message field
     if (extracted.allMessages && extracted.allMessages.length > 0) {
       const formattedMessages = extracted.allMessages
-        .map(
-          (msg) =>
-            `[${msg.index}] ${msg.sender} (${msg.direction})${msg.timestamp ? " - " + msg.timestamp : ""}:\n${msg.message}`,
-        )
-        .join("\n\n" + "=".repeat(50) + "\n\n");
+        .map((msg) => {
+          const sender = msg.direction === "Outbound" ? "You" : msg.sender;
+          return `${sender} - ${msg.message}`;
+        })
+        .join("\n");
 
       messageEl.value = formattedMessages;
       setStatus(`Extracted ${extracted.allMessages.length} messages ✅`);
